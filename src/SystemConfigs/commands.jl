@@ -28,7 +28,7 @@ writes(::Type{Cmds}) = ()
       V = helm_cmd_type.parameters[1]
       val_tuple_type = Tuple{[Val{fieldtype(V, j)} for j in 1:fieldcount(V)]...}
       final_tuple = Ark._spec_value_tuple_type(val_tuple_type, storage_type)
-      push!(ark_cmd_types, Ark.NewEntity{final_tuple})
+      push!(ark_cmd_types, Ark.NewEntityCommand{final_tuple})
 
     elseif helm_cmd_type <: RemoveEntity
       push!(ark_cmd_types, Ark.RemoveEntity)
@@ -37,13 +37,13 @@ writes(::Type{Cmds}) = ()
       C = helm_cmd_type.parameters[1]
       val_tuple_type = Tuple{[Val{fieldtype(C, j)} for j in 1:fieldcount(C)]...}
       final_tuple = Ark._spec_value_tuple_type(val_tuple_type, storage_type)
-      push!(ark_cmd_types, Ark.AddComponents{final_tuple})
+      push!(ark_cmd_types, Ark.AddComponentsCommand{final_tuple})
 
     elseif helm_cmd_type <: RemoveComponents
       R = helm_cmd_type.parameters[1]
       val_tuple_type = Tuple{[Val{fieldtype(R, j)} for j in 1:fieldcount(R)]...}
       final_tuple = Ark._spec_value_tuple_type(val_tuple_type)  # 1-arg method
-      push!(ark_cmd_types, Ark.RemoveComponents{final_tuple})
+      push!(ark_cmd_types, Ark.RemoveComponentsCommand{final_tuple})
 
     elseif helm_cmd_type <: ExchangeComponents
       A = helm_cmd_type.parameters[1]
@@ -52,18 +52,18 @@ writes(::Type{Cmds}) = ()
       final_tuple_A = Ark._spec_value_tuple_type(val_tuple_A, storage_type)
       val_tuple_R = Tuple{[Val{fieldtype(R, j)} for j in 1:fieldcount(R)]...}
       final_tuple_R = Ark._spec_value_tuple_type(val_tuple_R)  # 1-arg for remove part
-      push!(ark_cmd_types, Ark.ExchangeComponents{final_tuple_A,final_tuple_R})
+      push!(ark_cmd_types, Ark.ExchangeComponentsCommand{final_tuple_A,final_tuple_R})
 
     elseif helm_cmd_type <: SetComponents
       V = helm_cmd_type.parameters[1]
       val_tuple_type = Tuple{[Val{fieldtype(V, j)} for j in 1:fieldcount(V)]...}
       final_tuple = Ark._spec_value_tuple_type(val_tuple_type)   # 1-arg method
-      push!(ark_cmd_types, Ark.SetComponents{final_tuple})
+      push!(ark_cmd_types, Ark.SetComponentsCommand{final_tuple})
 
     elseif helm_cmd_type <: SetRelations
       R = helm_cmd_type.parameters[1]
       final_tuple = Ark._spec_relations_tuple_type(R)   # does not need Val-wrapping
-      push!(ark_cmd_types, Ark.SetRelations{final_tuple})
+      push!(ark_cmd_types, Ark.SetRelationsCommand{final_tuple})
     end
   end
 
@@ -86,7 +86,6 @@ function _extract_component_types(VT::Type{<:Tuple})
   return Tuple{component_types...}
 end
 
-# --- Dispatch on the command function ---
 
 function _spec_command_type(spec::Tuple{typeof(Ark.new_entity!),T}) where {T<:Tuple}
   val_tuple = _valtuple(spec[2])            # (Val{Int}(), Val{Float64}())
@@ -111,7 +110,6 @@ end
 function _spec_command_type(
   spec::Tuple{typeof(Ark.exchange_components!),NamedTuple{(:add, :remove),<:Tuple{A,R}}}
 ) where {A<:Tuple,R<:Tuple}
-  # spec[2] is (add = (Type1, Type2), remove = (Type3,))
   add_val_tuple = _valtuple(spec[2].add)
   remove_val_tuple = _valtuple(spec[2].remove)
   VT_add = typeof(add_val_tuple)

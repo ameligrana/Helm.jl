@@ -1,7 +1,10 @@
-struct QueryData{R,W,WI,WO} <: SystemConfig end
+struct QueryData{R,W,WI,WO,O} <: SystemConfig end
 struct Const{T} end
 
-Const(::Type{T}) where {T} = Const{T}
+function Const(::Type{T}) where {T}
+  Ark.Const(T)
+  return Const{T}
+end
 
 _unwrap_comp(::Type{T}) where {T} = (T, :write)
 _unwrap_comp(::Type{Const{T}}) where {T} = (T, :read)
@@ -27,30 +30,38 @@ end
 
 function Query(comps::Tuple; with=(), without=())
   R, W = separate_reads_and_writes(comps)
-  return QueryData{Tuple{R...},Tuple{W...},Tuple{with...},Tuple{without...}}()
+  return QueryData{
+    Tuple{R...},
+    Tuple{W...},
+    Tuple{with...},
+    Tuple{without...},
+    Tuple{comps...},
+  }()
 end
 
-@generated function Ark.Query(
+function Ark.Query(
   w::Ark.World,
-  ::QueryData{R_Tuple,W_Tuple,WI_Tuple,WO_Tuple}
+  ::QueryData{R_Tuple,W_Tuple,WI_Tuple,WO_Tuple,O_Tuple},
 ) where {
   R_Tuple<:Tuple,
   W_Tuple<:Tuple,
   WI_Tuple<:Tuple,
   WO_Tuple<:Tuple,
+  O_Tuple<:Tuple,
 }
-  r_types = map(T -> Ark.Const{T}, R_Tuple.parameters)
-  w_types = W_Tuple.parameters
-  wi_types = WI_Tuple.parameters
-  wo_types = WO_Tuple.parameters
-
-  comp_types = (r_types..., w_types...)
-
-  return :(Ark.Query(w, $comp_types; with=$((wi_types...,)), without=$((wo_types...,))))
+  component_types = map(O_Tuple.parameters) do T
+    T <: Const ? Ark.Const{T.parameters[1]} : T
+  end
+  return Ark.Query(
+    w,
+    Tuple(component_types);
+    with=Tuple(WI_Tuple.parameters),
+    without=Tuple(WO_Tuple.parameters),
+  )
 end
 
-reads(::QueryData{R,W,WI,WO}) where {R,W,WI,WO} = R
-writes(::QueryData{R,W,WI,WO}) where {R,W,WI,WO} = W
+reads(::QueryData{R,W,WI,WO,O}) where {R,W,WI,WO,O} = R
+writes(::QueryData{R,W,WI,WO,O}) where {R,W,WI,WO,O} = W
 
-reads(::Type{QueryData{R,W,WI,WO}}) where {R,W,WI,WO} = R.parameters
-writes(::Type{QueryData{R,W,WI,WO}}) where {R,W,WI,WO} = W.parameters
+reads(::Type{QueryData{R,W,WI,WO,O}}) where {R,W,WI,WO,O} = R.parameters
+writes(::Type{QueryData{R,W,WI,WO,O}}) where {R,W,WI,WO,O} = W.parameters

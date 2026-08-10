@@ -2,7 +2,7 @@
 
 julia_version = "1.12.6"
 manifest_format = "2.0"
-project_hash = "dc26801a42dea85d011c154bad4abd7ed54051a1"
+project_hash = "68b8982a5ae0df90009e9bf5b76083b273255397"
 
 [[deps.Accessors]]
 deps = ["CompositionsBase", "ConstructionBase", "Dates", "InverseFunctions", "MacroTools"]
@@ -28,9 +28,22 @@ version = "0.1.44"
     Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
     Unitful = "1986cc42-f94f-5a68-af5c-568840ba703d"
 
+[[deps.Adapt]]
+deps = ["LinearAlgebra"]
+git-tree-sha1 = "daa72978cd7a624246e894a4f4f067706d4e17e2"
+uuid = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
+version = "4.7.0"
+weakdeps = ["SparseArrays", "StaticArrays"]
+
+    [deps.Adapt.extensions]
+    AdaptSparseArraysExt = "SparseArrays"
+    AdaptStaticArraysExt = "StaticArrays"
+
 [[deps.Ark]]
-deps = ["FieldViews", "FunctionWrappers", "PrecompileTools", "Preferences", "Random", "StaticArrays"]
-git-tree-sha1 = "f3bc74cec11b204f582df4191f2ddb2ca4d39368"
+deps = ["Adapt", "FieldViews", "FileWatching", "FunctionWrappers", "Mmap", "PrecompileTools", "Preferences", "Random", "StaticArrays"]
+git-tree-sha1 = "ff392fdbee9f018ed024f81899c09fb87c08fb27"
+repo-rev = "9dbae34d945e38ebdaaf07b762be408004d13d02"
+repo-url = "https://github.com/ark-ecs/Ark.jl"
 uuid = "56664e29-41e4-4ea5-ab0e-825499acc647"
 version = "0.5.1"
 
@@ -116,6 +129,10 @@ weakdeps = ["StaticArrays"]
     [deps.FieldViews.extensions]
     StaticArraysExt = "StaticArrays"
 
+[[deps.FileWatching]]
+uuid = "7b1f6079-737a-58dc-b8bc-7a2ca5c1b5ee"
+version = "1.11.0"
+
 [[deps.FunctionWrappers]]
 git-tree-sha1 = "d62485945ce5ae9c0c48f124a84998d755bae00e"
 uuid = "069b7b12-0de2-55c6-9aab-29f3d0a68a2e"
@@ -185,6 +202,10 @@ version = "0.5.16"
 [[deps.Markdown]]
 deps = ["Base64", "JuliaSyntaxHighlighting", "StyledStrings"]
 uuid = "d6f4376e-aef5-505a-96c1-9c027394607a"
+version = "1.11.0"
+
+[[deps.Mmap]]
+uuid = "a63ad114-7e13-5084-954f-fe012c677804"
 version = "1.11.0"
 
 [[deps.OpenBLAS_jll]]

@@ -14,8 +14,8 @@ end
     return Ark.Query(world, q)
 end
 
-@inline function fetch_arg(world::Ark.World, r::ResourceData)
-    return Ark.get_resource(world, r._datatype)
+@inline function fetch_arg(world::Ark.World, ::ResourceData{D,M}) where {D,M}
+    return Ark.get_resource(world, D)
 end
 
 @inline function fetch_arg(world::Ark.World, c::Cmds)
@@ -23,29 +23,16 @@ end
 end
 
 
-@generated function (sys::System{T, C})(world::Ark.World) where {T, C}
-    N = length(C.parameters)
-
-    fetch_exprs = [:(arg_ $ i = fetch_arg(world, sys._configs[$i])) for i in 1:N]
-
-    sys_args = [:(arg_ $ i) for i in 1:N]
-
-    apply_exprs = Expr[]
-    for i in 1:N
-        if C.parameters[i] <: Cmds
-            push!(apply_exprs, :(Ark.apply!(world, arg_ $ i)))
-        end
+function (sys::System)(world::Ark.World)
+    args = map(sys._configs) do config
+        fetch_arg(world, config)
     end
 
-    return quote
-        $(fetch_exprs...)
-
-        return_value = sys._f($(sys_args...))
-
-        $(apply_exprs...)
-
-        return return_value
+    return_value = sys._f(args...)
+    for (config, arg) in zip(sys._configs, args)
+        config isa Cmds && Ark.apply!(arg)
     end
+    return return_value
 end
 
 

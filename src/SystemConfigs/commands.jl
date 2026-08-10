@@ -20,57 +20,35 @@ reads(::Type{Cmds}) = ()
 writes(::Type{Cmds}) = ()
 
 @generated function to_command_buffer(world::W, ::Cmds{N,T}) where {W<:Ark.World,N,T<:Tuple}
-  storage_type = W.parameters[1]
-  ark_cmd_types = DataType[]
+    ark_specs = Expr[]
 
-  for helm_cmd_type in T.parameters
-    if helm_cmd_type <: NewEntity
-      V = helm_cmd_type.parameters[1]
-      val_tuple_type = Tuple{[Val{fieldtype(V, j)} for j in 1:fieldcount(V)]...}
-      final_tuple = Ark._spec_value_tuple_type(val_tuple_type, storage_type)
-      push!(ark_cmd_types, Ark.NewEntityCommand{final_tuple})
-
-    elseif helm_cmd_type <: RemoveEntity
-      push!(ark_cmd_types, Ark.RemoveEntity)
-
-    elseif helm_cmd_type <: AddComponents
-      C = helm_cmd_type.parameters[1]
-      val_tuple_type = Tuple{[Val{fieldtype(C, j)} for j in 1:fieldcount(C)]...}
-      final_tuple = Ark._spec_value_tuple_type(val_tuple_type, storage_type)
-      push!(ark_cmd_types, Ark.AddComponentsCommand{final_tuple})
-
-    elseif helm_cmd_type <: RemoveComponents
-      R = helm_cmd_type.parameters[1]
-      val_tuple_type = Tuple{[Val{fieldtype(R, j)} for j in 1:fieldcount(R)]...}
-      final_tuple = Ark._spec_value_tuple_type(val_tuple_type)  # 1-arg method
-      push!(ark_cmd_types, Ark.RemoveComponentsCommand{final_tuple})
-
-    elseif helm_cmd_type <: ExchangeComponents
-      A = helm_cmd_type.parameters[1]
-      R = helm_cmd_type.parameters[2]
-      val_tuple_A = Tuple{[Val{fieldtype(A, j)} for j in 1:fieldcount(A)]...}
-      final_tuple_A = Ark._spec_value_tuple_type(val_tuple_A, storage_type)
-      val_tuple_R = Tuple{[Val{fieldtype(R, j)} for j in 1:fieldcount(R)]...}
-      final_tuple_R = Ark._spec_value_tuple_type(val_tuple_R)  # 1-arg for remove part
-      push!(ark_cmd_types, Ark.ExchangeComponentsCommand{final_tuple_A,final_tuple_R})
-
-    elseif helm_cmd_type <: SetComponents
-      V = helm_cmd_type.parameters[1]
-      val_tuple_type = Tuple{[Val{fieldtype(V, j)} for j in 1:fieldcount(V)]...}
-      final_tuple = Ark._spec_value_tuple_type(val_tuple_type)   # 1-arg method
-      push!(ark_cmd_types, Ark.SetComponentsCommand{final_tuple})
-
-    elseif helm_cmd_type <: SetRelations
-      R = helm_cmd_type.parameters[1]
-      final_tuple = Ark._spec_relations_tuple_type(R)   # does not need Val-wrapping
-      push!(ark_cmd_types, Ark.SetRelationsCommand{final_tuple})
+    for helm_cmd_type in T.parameters
+        if helm_cmd_type <: NewEntity
+            values = Expr(:tuple, helm_cmd_type.parameters[1].parameters...)
+            push!(ark_specs, :(Ark.NewEntityCommand($values)))
+        elseif helm_cmd_type <: RemoveEntity
+            push!(ark_specs, :(Ark.RemoveEntityCommand()))
+        elseif helm_cmd_type <: AddComponents
+            values = Expr(:tuple, helm_cmd_type.parameters[1].parameters...)
+            push!(ark_specs, :(Ark.AddComponentsCommand($values)))
+        elseif helm_cmd_type <: RemoveComponents
+            values = Expr(:tuple, helm_cmd_type.parameters[1].parameters...)
+            push!(ark_specs, :(Ark.RemoveComponentsCommand($values)))
+        elseif helm_cmd_type <: ExchangeComponents
+            add = Expr(:tuple, helm_cmd_type.parameters[1].parameters...)
+            remove = Expr(:tuple, helm_cmd_type.parameters[2].parameters...)
+            push!(ark_specs, :(Ark.ExchangeComponentsCommand(add=$add, remove=$remove)))
+        elseif helm_cmd_type <: SetComponents
+            values = Expr(:tuple, helm_cmd_type.parameters[1].parameters...)
+            push!(ark_specs, :(Ark.SetComponentsCommand($values)))
+        elseif helm_cmd_type <: SetRelations
+            values = Expr(:tuple, helm_cmd_type.parameters[1].parameters...)
+            push!(ark_specs, :(Ark.SetRelationsCommand($values)))
+        end
     end
-  end
 
-  C = length(ark_cmd_types) == 1 ? ark_cmd_types[1] : Union{ark_cmd_types...}
-  return quote
-    return Ark.CommandBuffer{$W,$C}(world, Vector{$C}())
-  end
+    specs = Expr(:tuple, ark_specs...)
+    return :(Ark.CommandBuffer(world, $specs))
 end
 
 
@@ -134,7 +112,7 @@ _spec_command_type(x) = throw(ArgumentError("unknown command specification: $x")
 
 
 function _specs_to_types(specs::Tuple)
-  n == 0 && throw(
+  length(specs) == 0 && throw(
     ArgumentError("command buffer needs to contain at least one deferred operation")
   )
 

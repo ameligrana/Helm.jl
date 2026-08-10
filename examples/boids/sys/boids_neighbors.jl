@@ -1,61 +1,55 @@
-struct BoidsNeighbors <: System
+struct BoidsNeighbors
     max_distance::Int
 end
 
-BoidsNeighbors(;
-    max_distance::Int,
-) = BoidsNeighbors(max_distance)
+BoidsNeighbors(; max_distance::Int) = BoidsNeighbors(max_distance)
 
-initialize_grid = System(Res(WorldSize), Res(BoidsNeighbors), Cmds) do size, s, cmds
-    add_resource!(cmds, Grid(size.width, size.height, s.max_distance))
-end
-
-update_grid = System(ResMut(Grid), Query((Position,))) do grid, q
-    grid = get_resource(world, Grid)
-
-    for i in 1:grid.rows, j in 1:grid.cols
-        resize!(grid.entities[i, j], 0)
+update_grid = System(ResMut(Grid), Query((Const(Position),))) do grid, query
+    for row in axes(grid.entities, 1), column in axes(grid.entities, 2)
+        empty!(grid.entities[row, column])
     end
 
-    for (entities, positions) in q
+    for (entities, positions) in query
         for i in eachindex(entities, positions)
-            row, col = cell(grid, positions[i].p)
-            push!(grid.entities[row, col], entities[i])
+            row, column = cell(grid, positions[i].p)
+            push!(grid.entities[row, column], entities[i])
         end
     end
+    return nothing
 end
 
-update_neighbors = System(Res(Tick), Res(BoidsNeighbors), Query((Position, Mut(Neighbors), UpdateStep))) do ticks, s, q
-
-
+update_neighbors = System(
+    Res(Tick),
+    Res(Grid),
+    Res(BoidsNeighbors),
+    Query((Const(Position), Neighbors, Const(UpdateStep))),
+) do ticks, grid, settings, query
     tick = ticks.tick
-    max_dist_sq = Float64(s.max_distance * s.max_distance)
+    max_distance_sq = Float64(settings.max_distance * settings.max_distance)
 
-    for (entities1, positions1, neighbors, updates) in q
-        for i in eachindex(positions1, neighbors, updates)
-            if tick % 30 != updates[i].step
-                continue
-            end
-            pos1 = positions1[i]
-            entity1 = entities1[i]
-            neigh = neighbors[i]
-            resize!(neigh.n, 0)
+    for (entities, positions, neighbors, updates) in query
+        for i in eachindex(entities, positions, neighbors, updates)
+            tick % 30 == updates[i].step || continue
 
-            row, col = cell(grid, pos1.p)
+            entity = entities[i]
+            position = positions[i]
+            neighbor_entities = neighbors[i].n
+            empty!(neighbor_entities)
+            row, column = cell(grid, position.p)
 
-            for r in max(row - 1, 1):min(row + 1, grid.rows), c in max(col - 1, 1):min(col + 1, grid.cols)
-                candidates = grid.entities[r, c]
-                for entity2 in candidates
-                    if entity1 == entity2
-                        continue
-                    end
-                    pos2, = get_components(world, entity2, (Position,))
-                    if distance_sq(pos1.p, pos2.p) <= max_dist_sq
-                        push!(neigh.n, entity2)
+            for candidate_row in max(row - 1, 1):min(row + 1, grid.rows)
+                for candidate_column in max(column - 1, 1):min(column + 1, grid.cols)
+                    for candidate in grid.entities[candidate_row, candidate_column]
+                        candidate == entity && continue
+                        has_components(query, candidate, (Position,)) || continue
+                        candidate_position, = get_components(query, candidate, (Position,))
+                        if distance_sq(position.p, candidate_position.p) <= max_distance_sq
+                            push!(neighbor_entities, candidate)
+                        end
                     end
                 end
             end
         end
     end
-    return
+    return nothing
 end

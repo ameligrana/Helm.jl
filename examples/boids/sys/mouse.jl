@@ -1,16 +1,12 @@
-struct MouseSystem <: System
-end
-
-function initialize!(s::MouseSystem, world::World)
-    window = get_resource(world, Window)
-    size = get_resource(world, WorldSize)
-
-    mouse = add_resource!(world, Mouse(0, 0, false))
-
-    on(window.scene.events.mouseposition) do mp
-        mouse.x = mp[1]
-        mouse.y = mp[2]
-        x, y = mp
-        mouse.inside = contains(size, x, y)
+install_mouse_handler = System(
+    Res(Window),
+    Res(WorldSize),
+    ResMut(Mouse),
+) do window, size, mouse
+    on(window.scene.events.mouseposition) do mouse_position
+        mouse.x = mouse_position[1]
+        mouse.y = mouse_position[2]
+        mouse.inside = contains(size, mouse.x, mouse.y)
     end
+    return nothing
 end

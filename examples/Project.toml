@@ -12,3 +12,6 @@ KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 Helm = "ad10e78d-fd3c-4082-ae24-c059e97af633"
 
+[sources]
+Ark = {url = "https://github.com/ark-ecs/Ark.jl", rev = "9dbae34d945e38ebdaaf07b762be408004d13d02"}
+Helm = {path = ".."}

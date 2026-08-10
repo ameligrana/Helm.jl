@@ -1,6 +1,6 @@
 
 function direction_to_rotation(v::Point2f)
-    return atan(v[2], v[1])
+    return atan(Float64(v[2]), Float64(v[1]))
 end
 
 function rotation_to_direction(a::Float64, v::Float64)

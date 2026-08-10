@@ -11,7 +11,7 @@ struct BoidsMovement
     mouse_avoid_factor::Float64
 end
 
-BoidsMovement(;
+function BoidsMovement(;
     avoid_factor::Float64,
     avoid_distance::Float64,
     align_factor::Float64,
@@ -22,105 +22,131 @@ BoidsMovement(;
     margin_factor::Float64,
     mouse_radius::Float64,
     mouse_avoid_factor::Float64,
-) = BoidsMovement(
-    avoid_factor,
-    avoid_distance,
-    align_factor,
-    cohesion_factor,
-    min_speed,
-    max_speed,
-    margin,
-    margin_factor,
-    mouse_radius,
-    mouse_avoid_factor,
 )
+    return BoidsMovement(
+        avoid_factor,
+        avoid_distance,
+        align_factor,
+        cohesion_factor,
+        min_speed,
+        max_speed,
+        margin,
+        margin_factor,
+        mouse_radius,
+        mouse_avoid_factor,
+    )
+end
 
-update_movement = System(Res(BoidsMovement), Res(WorldSize), Res(Mouse), Query((Position, Mut(Velocity), Neighbors))) do s, size, mouse, q
-    avoid_dist_sq = s.avoid_distance * s.avoid_distance
-    mouse_dist_sq = s.mouse_radius * s.mouse_radius
-    for (_, positions, velocities, neighbors) in q
-        for i in eachindex(positions, velocities, neighbors)
-            pos = positions[i].p
-            vel = velocities[i].v
-            neigh = neighbors[i].n
+update_movement = System(
+    Res(BoidsMovement),
+    Res(WorldSize),
+    Res(Mouse),
+    Query((Position, Velocity, Neighbors)),
+) do settings, size, mouse, query
+    avoid_distance_sq = settings.avoid_distance * settings.avoid_distance
+    mouse_distance_sq = settings.mouse_radius * settings.mouse_radius
+
+    for (entities, positions, velocities, neighbors) in query
+        for i in eachindex(entities, positions, velocities, neighbors)
+            entity = entities[i]
+            position = positions[i].p
+            velocity = velocities[i].v
 
             close_x, close_y = 0.0, 0.0
-            avg_x, avg_y = 0.0, 0.0
-            avg_vx, avg_vy = 0.0, 0.0
-            for n in neigh
-                other_pos, other_vel = get_components(world, n, (Position, Velocity))
-                dist_sq = distance_sq(pos, other_pos.p)
-                if dist_sq <= avoid_dist_sq
-                    close_x += pos[1] - other_pos.p[1]
-                    close_y += pos[2] - other_pos.p[2]
+            average_x, average_y = 0.0, 0.0
+            average_vx, average_vy = 0.0, 0.0
+            neighbor_count = 0
+
+            for neighbor in neighbors[i].n
+                has_components(query, neighbor, (Position, Velocity)) || continue
+                other_position, other_velocity =
+                    get_components(query, neighbor, (Position, Velocity))
+                distance = distance_sq(position, other_position.p)
+                if distance <= avoid_distance_sq
+                    close_x += position[1] - other_position.p[1]
+                    close_y += position[2] - other_position.p[2]
                 end
-                avg_x += other_pos.p[1]
-                avg_y += other_pos.p[2]
-                avg_vx += other_vel.v[1]
-                avg_vy += other_vel.v[2]
+                average_x += other_position.p[1]
+                average_y += other_position.p[2]
+                average_vx += other_velocity.v[1]
+                average_vy += other_velocity.v[2]
+                neighbor_count += 1
             end
 
-            vx, vy = vel[1], vel[2]
-            if length(neigh) > 0
-                avg_x /= length(neigh)
-                avg_y /= length(neigh)
-                avg_vx /= length(neigh)
-                avg_vy /= length(neigh)
-
+            vx, vy = velocity[1], velocity[2]
+            if neighbor_count > 0
+                average_x /= neighbor_count
+                average_y /= neighbor_count
+                average_vx /= neighbor_count
+                average_vy /= neighbor_count
                 close_x, close_y = normalize(close_x, close_y)
-                vx +=
-                    close_x * s.avoid_factor + (avg_vx - vel[1]) * s.align_factor +
-                    (avg_x - pos[1]) * s.cohesion_factor
-                vy +=
-                    close_y * s.avoid_factor + (avg_vy - vel[1]) * s.align_factor +
-                    (avg_y - pos[2]) * s.cohesion_factor
+
+                vx += close_x * settings.avoid_factor +
+                      (average_vx - velocity[1]) * settings.align_factor +
+                      (average_x - position[1]) * settings.cohesion_factor
+                # Preserve the original example's Y-alignment-against-X quirk.
+                vy += close_y * settings.avoid_factor +
+                      (average_vy - velocity[1]) * settings.align_factor +
+                      (average_y - position[2]) * settings.cohesion_factor
             end
 
             if mouse.inside
-                dist_sq = distance_sq(Point2f(mouse.x, mouse.y), pos)
-                if dist_sq < mouse_dist_sq
-                    f = 1 - sqrt(dist_sq) / s.mouse_radius
-                    dx, dy = normalize(pos[1] - mouse.x, pos[2] - mouse.y)
-                    vx += dx * s.avoid_factor * f
-                    vy += dy * s.avoid_factor * f
+                distance = distance_sq(Point2f(mouse.x, mouse.y), position)
+                if distance < mouse_distance_sq
+                    factor = 1 - sqrt(distance) / settings.mouse_radius
+                    dx, dy = normalize(position[1] - mouse.x, position[2] - mouse.y)
+                    # Preserve the original use of avoid_factor here.
+                    vx += dx * settings.avoid_factor * factor
+                    vy += dy * settings.avoid_factor * factor
                 end
             end
 
-            if pos[1] < s.margin
-                f = 1 - pos[1] / s.margin
-                vx += s.margin_factor * f * f
-            elseif pos[1] > size.width - s.margin
-                f = 1 - (size.width - pos[1]) / s.margin
-                vx -= s.margin_factor * f * f
+            if position[1] < settings.margin
+                factor = 1 - position[1] / settings.margin
+                vx += settings.margin_factor * factor * factor
+            elseif position[1] > size.width - settings.margin
+                factor = 1 - (size.width - position[1]) / settings.margin
+                vx -= settings.margin_factor * factor * factor
             end
-            if pos[2] < s.margin
-                f = 1 - pos[2] / s.margin
-                vy += s.margin_factor * f * f
-            elseif pos[2] > size.height - s.margin
-                f = 1 - (size.height - pos[2]) / s.margin
-                vy -= s.margin_factor * f * f
+            if position[2] < settings.margin
+                factor = 1 - position[2] / settings.margin
+                vy += settings.margin_factor * factor * factor
+            elseif position[2] > size.height - settings.margin
+                factor = 1 - (size.height - position[2]) / settings.margin
+                vy -= settings.margin_factor * factor * factor
             end
 
             speed = sqrt(vx * vx + vy * vy)
-            if speed < s.min_speed
-                vx = (vx / speed) * s.min_speed
-                vy = (vy / speed) * s.min_speed
-            elseif speed > s.max_speed
-                vx = (vx / speed) * s.max_speed
-                vy = (vy / speed) * s.max_speed
+            if speed < settings.min_speed
+                vx = vx / speed * settings.min_speed
+                vy = vy / speed * settings.min_speed
+            elseif speed > settings.max_speed
+                vx = vx / speed * settings.max_speed
+                vy = vy / speed * settings.max_speed
             end
 
-            velocities[i] = Velocity((vx, vy))
-            positions[i] = Position((pos[1] + vx, pos[2] + vy))
+            set_components!(
+                query,
+                entity,
+                (
+                    Position(Point2f(position[1] + vx, position[2] + vy)),
+                    Velocity(Point2f(vx, vy)),
+                ),
+            )
         end
     end
-
-
-    return
+    return nothing
 end
 
-update_rotations = System(Query((Velocity, Mut(Rotation)))) do q
-    for (_, velocities, rotations) in q
-        rotations.r .= direction_to_rotation.(velocities.v)
+update_rotations = System(Query((Const(Velocity), Rotation))) do query
+    for (entities, velocities, _) in query
+        for i in eachindex(entities, velocities)
+            set_components!(
+                query,
+                entities[i],
+                (Rotation(direction_to_rotation(velocities[i].v)),),
+            )
+        end
     end
+    return nothing
 end

@@ -18,6 +18,10 @@ mutable struct Mouse
     inside::Bool
 end
 
+mutable struct Tick
+    tick::Int
+end
+
 struct PlotData
     positions::Observable{Vector{Point2f}}
     rotations::Observable{Vector{Float64}}

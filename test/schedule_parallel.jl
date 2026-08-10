@@ -5,6 +5,7 @@ using Helm
 struct Comp1 end
 struct Comp2 end
 struct Comp3 end
+mutable struct MutableComp end
 
 # Define systems with different access patterns
 sys_r1 = Helm.System(_q -> nothing, Query((Const(Comp1),)))
@@ -14,6 +15,11 @@ sys_w2 = Helm.System(_q -> nothing, Query((Comp2,)))
 sys_r1_r2 = Helm.System(_q -> nothing, Query((Const(Comp1), Const(Comp2))))
 
 @testset "Parallel Scheduling" begin
+    @testset "Read-only component validation" begin
+        @test Const(Comp1) === Helm.Const{Comp1}
+        @test_throws ArgumentError Const(MutableComp)
+    end
+
   @testset "Completely Independent Systems" begin
     # r1 and r2 read different components
     s = Schedule(sys_r1, sys_r2)

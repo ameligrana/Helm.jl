@@ -2,8 +2,11 @@ struct QueryData{R,W,WI,WO,O} <: SystemConfig end
 struct Const{T} end
 
 function Const(::Type{T}) where {T}
-  Ark.Const(T)
-  return Const{T}
+    if !isbitstype(T)
+        throw(ArgumentError("A component can be marked constant only if immutable."))
+    end
+
+    return Const{T}
 end
 
 _unwrap_comp(::Type{T}) where {T} = (T, :write)

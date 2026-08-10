@@ -170,7 +170,13 @@ end
         Ark.add_resource!(world, B.WorldSize(100, 80))
         Ark.add_resource!(world, B.BoidsInit(count=4))
 
-        B.initialize_boids(world)
+        finish_startup = Helm.System(Helm.Res(B.WorldSize)) do _
+            return nothing
+        end
+        startup = Helm.Schedule(Helm.chain(B.initialize_boids, finish_startup))
+        for stage in Helm.get_execution_order(startup), system in stage
+            system(world)
+        end
 
         count = sum(
             length(entities)

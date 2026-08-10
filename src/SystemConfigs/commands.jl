@@ -16,8 +16,8 @@ struct SetRelations{R<:Tuple} <: AbstractCommand end
 
 reads(::Cmds) = ()
 writes(::Cmds) = ()
-reads(::Type{Cmds}) = ()
-writes(::Type{Cmds}) = ()
+reads(::Type{<:Cmds}) = ()
+writes(::Type{<:Cmds}) = ()
 
 @generated function to_command_buffer(world::W, ::Cmds{N,T}) where {W<:Ark.World,N,T<:Tuple}
     ark_specs = Expr[]

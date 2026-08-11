@@ -1,7 +1,7 @@
 using Ark
 using GeometryBasics
 using GLMakie
-using Helm: Cmds, Const, Query, Res, ResMut, Schedule, System, chain, get_execution_order
+using Helm: Cmds, Const, Query, Res, ResMut, Schedule, System, chain, execute!
 
 include("util.jl")
 include("components.jl")
@@ -45,15 +45,6 @@ function setup_makie(world_size::WorldSize)
   screen = display(scene)
   GLMakie.GLFW.SetWindowTitle(screen.glscreen, "Boids demo")
   return Window(screen, scene), data
-end
-
-function execute!(schedule::Schedule, world::World)
-  for stage in get_execution_order(schedule)
-    for system in stage
-      system(world)
-    end
-  end
-  return nothing
 end
 
 function run!(world::World, schedule::Schedule)

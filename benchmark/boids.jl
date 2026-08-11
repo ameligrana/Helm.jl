@@ -174,7 +174,7 @@ end
 
 struct BenchmarkCase{W,S}
     world::W
-    schedule::S
+    scheduler::S
 end
 
 function make_case(boid_count::Int, seed::Int)
@@ -210,23 +210,33 @@ function make_case(boid_count::Int, seed::Int)
         ),
     )
 
-    Helm.execute!(Helm.Schedule(initialize_boids), world)
-    schedule = Helm.Schedule(
-        Helm.chain(
-            update_grid,
-            update_neighbors,
-            update_movement,
-            update_rotations,
-            advance_tick,
+    scheduler = Helm.Scheduler(
+        startup=Helm.Schedule(initialize_boids; name=:startup),
+        update=Helm.Schedule(
+            Helm.chain(
+                update_grid,
+                update_neighbors,
+                update_movement,
+                update_rotations,
+                advance_tick,
+            );
+            name=:update,
         ),
+        executor=Helm.AutoExecutor(),
     )
-    return BenchmarkCase(world, schedule)
+    Helm.startup!(scheduler, world)
+    return BenchmarkCase(world, scheduler)
 end
 
 function run_frames!(case::BenchmarkCase, frames::Int)
     for _ in 1:frames
-        Helm.execute!(case.schedule, case.world)
+        Helm.update!(case.scheduler, case.world)
     end
+    return nothing
+end
+
+function close!(case::BenchmarkCase)
+    Helm.shutdown!(case.scheduler, case.world)
     return nothing
 end
 
@@ -250,7 +260,9 @@ function benchmark_boids()
         OriginalBoidsBenchmark.make_case(boid_count, seed),
         1,
     )
-    HelmBoidsBenchmark.run_frames!(HelmBoidsBenchmark.make_case(boid_count, seed), 1)
+    helm_warmup = HelmBoidsBenchmark.make_case(boid_count, seed)
+    HelmBoidsBenchmark.run_frames!(helm_warmup, 1)
+    HelmBoidsBenchmark.close!(helm_warmup)
 
     println("Boids benchmark")
     println("  boids:  $boid_count")
@@ -264,14 +276,14 @@ function benchmark_boids()
 
     helm = @benchmark HelmBoidsBenchmark.run_frames!(case, $frames) setup = (
         case = HelmBoidsBenchmark.make_case($boid_count, $seed)
-    ) evals = 1 samples = samples
+    ) teardown = (HelmBoidsBenchmark.close!(case)) evals = 1 samples = samples
 
     original_ns = BenchmarkTools.median(original).time / frames
     helm_ns = BenchmarkTools.median(helm).time / frames
 
     println("\nboids-original")
     display(original)
-    println("\nboids (Helm)")
+    println("\nboids (Helm Scheduler + AutoExecutor)")
     display(helm)
     println()
     @printf "Median per frame: original %.3f ms, Helm %.3f ms\n" original_ns / 1e6 helm_ns / 1e6

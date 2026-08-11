@@ -1,7 +1,8 @@
 using Ark
 using GeometryBasics
 using GLMakie
-using Helm: Cmds, Const, Query, Res, ResMut, Schedule, System, chain, execute!
+using Helm: AutoExecutor, Cmds, Const, Query, Res, ResMut, Schedule, Scheduler, System
+using Helm: chain, shutdown!, startup!, update!
 
 include("util.jl")
 include("components.jl")
@@ -47,18 +48,23 @@ function setup_makie(world_size::WorldSize)
   return Window(screen, scene), data
 end
 
-function run!(world::World, schedule::Schedule)
-  window = get_resource(world, Window)
-  frame = Ref(0)
-  on(window.screen.render_tick) do _
-    execute!(schedule, world)
-    frame[] += 1
-    if IS_CI && frame[] >= 240
-      close(window.screen)
+function run!(world::World, scheduler::Scheduler)
+  try
+    startup!(scheduler, world)
+    window = get_resource(world, Window)
+    frame = Ref(0)
+    on(window.screen.render_tick) do _
+      update!(scheduler, world)
+      frame[] += 1
+      if IS_CI && frame[] >= 240
+        close(window.screen)
+      end
     end
+    GLMakie.start_renderloop!(window.screen)
+    return wait(window.screen)
+  finally
+    shutdown!(scheduler, world)
   end
-  GLMakie.start_renderloop!(window.screen)
-  return wait(window.screen)
 end
 
 function main()
@@ -90,19 +96,22 @@ function main()
     ),
   )
 
-  startup = Schedule(chain(initialize_boids, install_mouse_handler))
-  update = Schedule(
-    chain(
-      update_grid,
-      update_neighbors,
-      update_movement,
-      update_rotations,
-      update_plot,
-      advance_tick,
-    )
+  scheduler = Scheduler(
+    startup=Schedule(chain(initialize_boids, install_mouse_handler); name=:startup),
+    update=Schedule(
+      chain(
+        update_grid,
+        update_neighbors,
+        update_movement,
+        update_rotations,
+        update_plot,
+        advance_tick,
+      );
+      name=:update,
+    ),
+    executor=AutoExecutor(),
   )
-  execute!(startup, world)
-  return run!(world, update)
+  return run!(world, scheduler)
 end
 
 main()

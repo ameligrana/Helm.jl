@@ -2,7 +2,7 @@ using Colors
 using CoherentNoise
 using GLMakie
 using GeometryBasics
-using Helm: chain, execute!
+using Helm: Scheduler, chain, execute!, shutdown!, startup!, update!
 
 const IS_CI = haskey(ENV, "CI")
 
@@ -209,20 +209,25 @@ end
 grazers_render_schedule() =
     Schedule(chain(update_grass_render, update_grazer_render, update_gene_plots))
 
-function run_grazers!(world::World, update::Schedule, render::Schedule)
-    window = get_resource(world, Window)
-    speed = get_resource(world, SimulationSpeed)
-    frame = Ref(0)
-    on(window.screen.render_tick) do _
-        for _ in 1:speed.speed
-            execute!(update, world)
+function run_grazers!(world::World, scheduler::Scheduler)
+    try
+        startup!(scheduler, world)
+        window = get_resource(world, Window)
+        speed = get_resource(world, SimulationSpeed)
+        frame = Ref(0)
+        on(window.screen.render_tick) do _
+            for _ in 1:speed.speed
+                update!(scheduler, world)
+            end
+            execute!(scheduler, Val(:render), world)
+            frame[] += 1
+            if IS_CI && frame[] >= 240
+                close(window.screen)
+            end
         end
-        execute!(render, world)
-        frame[] += 1
-        if IS_CI && frame[] >= 240
-            close(window.screen)
-        end
+        GLMakie.start_renderloop!(window.screen)
+        return wait(window.screen)
+    finally
+        shutdown!(scheduler, world)
     end
-    GLMakie.start_renderloop!(window.screen)
-    return wait(window.screen)
 end

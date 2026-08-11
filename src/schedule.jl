@@ -1,254 +1,374 @@
-struct Schedule{N, T <: Tuple{Vararg{AbstractSystem, N}}}
-    _systems::T
-    _dependency_graph::Gr.SimpleDiGraph{Int64}
-    _execution_stages::Vector{Vector{Int}}
-end
-
-struct SystemChain{N, T <: Tuple{Vararg{AbstractSystem, N}}} <: AbstractSystem
+struct SystemChain{N,T<:Tuple{Vararg{AbstractSystem,N}}} <: AbstractSystem
     _systems::T
 end
 
-function chain(systems::AbstractSystem...)
-    return SystemChain(systems)
-end
+chain(systems::AbstractSystem...) = SystemChain(systems)
 
-struct SystemDependency{T <: AbstractSystem, U <: AbstractSystem} <: AbstractSystem
+struct SystemDependency{T<:AbstractSystem,U<:AbstractSystem} <: AbstractSystem
     _before::T
     _after::U
 end
 
-function after(s::AbstractSystem, u::AbstractSystem)
-    return SystemDependency(u, s)
+after(system::AbstractSystem, dependency::AbstractSystem) =
+    SystemDependency(dependency, system)
+before(system::AbstractSystem, dependency::AbstractSystem) =
+    SystemDependency(system, dependency)
+
+"""Compact access masks retained for diagnostics and executor specialization."""
+struct AccessMasks
+    component_reads::Matrix{UInt64}
+    component_writes::Matrix{UInt64}
+    resource_reads::Matrix{UInt64}
+    resource_writes::Matrix{UInt64}
+    world_writes::BitVector
+    component_types::Vector{DataType}
+    resource_types::Vector{DataType}
 end
 
-function before(s::AbstractSystem, u::AbstractSystem)
-    return SystemDependency(s, u)
+"""Immutable execution metadata compiled from a schedule expression."""
+struct CompiledSchedule{N,O<:NTuple{N,Int}}
+    successor_offsets::Vector{Int}
+    successors::Vector{Int}
+    dependency_counts::Vector{Int}
+    topological_order::O
+    critical_path_ranks::Vector{Int}
+    names::Vector{Symbol}
+    priorities::Vector{Int}
+    stages::Vector{Vector{Int}}
+    accesses::AccessMasks
+    max_width::Int
 end
 
-function extract_unique_systems!(sys::System, flat_list, id_map)
-    if !haskey(id_map, sys)
-        push!(flat_list, sys)
-        id_map[sys] = length(flat_list) # ID is simply its index in the flat list
+struct Schedule{N,T<:Tuple{Vararg{System,N}},P<:CompiledSchedule{N},R}
+    _systems::T
+    _plan::P
+    _name::Symbol
+    _run_if::R
+end
+
+schedule_name(schedule::Schedule) = schedule._name
+
+function extract_unique_systems!(system::System, flat_list, id_map)
+    if !haskey(id_map, system)
+        push!(flat_list, system)
+        id_map[system] = length(flat_list)
     end
     return nothing
 end
 
-function extract_unique_systems!(chain::SystemChain, flat_list, id_map)
-    for s in chain._systems
-        extract_unique_systems!(s, flat_list, id_map)
+function extract_unique_systems!(system_chain::SystemChain, flat_list, id_map)
+    for system in system_chain._systems
+        extract_unique_systems!(system, flat_list, id_map)
     end
     return nothing
 end
 
-function extract_unique_systems!(dep::SystemDependency, flat_list, id_map)
-    extract_unique_systems!(dep._before, flat_list, id_map)
-    extract_unique_systems!(dep._after, flat_list, id_map)
+function extract_unique_systems!(dependency::SystemDependency, flat_list, id_map)
+    extract_unique_systems!(dependency._before, flat_list, id_map)
+    extract_unique_systems!(dependency._after, flat_list, id_map)
     return nothing
 end
-# Helper to build edges. Returns (entry_nodes, exit_nodes) for any block
-function build_edges!(sys::System, graph, id_map)
-    id = id_map[sys]
+
+function build_edges!(system::System, graph, id_map)
+    id = id_map[system]
     return ([id], [id])
 end
 
-function build_edges!(chain::SystemChain, graph, id_map)
+function build_edges!(system_chain::SystemChain, graph, id_map)
+    isempty(system_chain._systems) && return (Int[], Int[])
     entries = Int[]
-    prev_exits = Int[]
-
-    for (i, s) in enumerate(chain._systems)
-        curr_entries, curr_exits = build_edges!(s, graph, id_map)
-
-        if i == 1
-            entries = curr_entries
+    previous_exits = Int[]
+    for (index, system) in enumerate(system_chain._systems)
+        current_entries, current_exits = build_edges!(system, graph, id_map)
+        index == 1 && (entries = current_entries)
+        for source in previous_exits, destination in current_entries
+            Gr.add_edge!(graph, source, destination)
         end
-
-        # Connect all exits of the previous block to all entries of this block
-        for u in prev_exits
-            for v in curr_entries
-                Gr.add_edge!(graph, u, v)
-            end
-        end
-        prev_exits = curr_exits
+        previous_exits = current_exits
     end
-
-    return (entries, prev_exits)
+    return entries, previous_exits
 end
 
-function build_edges!(dep::SystemDependency, graph, id_map)
-    before_entries, before_exits = build_edges!(dep._before, graph, id_map)
-    after_entries, after_exits = build_edges!(dep._after, graph, id_map)
-
-    # Wire `before` -> `after`
-    for u in before_exits
-        for v in after_entries
-            Gr.add_edge!(graph, u, v)
-        end
+function build_edges!(dependency::SystemDependency, graph, id_map)
+    before_entries, before_exits = build_edges!(dependency._before, graph, id_map)
+    after_entries, after_exits = build_edges!(dependency._after, graph, id_map)
+    for source in before_exits, destination in after_entries
+        Gr.add_edge!(graph, source, destination)
     end
-
-    return (before_entries, after_exits)
+    return before_entries, after_exits
 end
 
-function Schedule(systems::AbstractSystem...)
-
-    flat_list = System[]
-    id_map = IdDict{System, Int}()
-
-    # First Pass: Extract all unique leaf systems and assign IDs
-    for s in systems
-        extract_unique_systems!(s, flat_list, id_map)
-    end
-
-    #second pass: construct dependency graph
-    graph = Gr.SimpleDiGraph{Int}(length(flat_list))
-
-
-    for s in systems
-        build_edges!(s, graph, id_map)
-    end
-
-    # Third Pass: Automatic Dependency Discovery
-    for i in 1:length(flat_list)
-        for j in (i + 1):length(flat_list)
-            s1 = flat_list[i]
-            s2 = flat_list[j]
-
-            if conflicts(s1, s2)
-                # If they conflict, and no explicit path exists, add an edge i -> j
-                # to maintain original argument order as a tie-breaker.
-                if !Gr.has_path(graph, i, j) && !Gr.has_path(graph, j, i)
-                    Gr.add_edge!(graph, i, j)
-                end
-            end
-        end
-    end
-
-
-    stages = topological_sort_in_layers(graph)
-
-    return Schedule(Tuple(flat_list), graph, stages)
+function _validate_acyclic(graph)
+    !Gr.is_cyclic(graph) ||
+        throw(ArgumentError("cycle detected in schedule dependencies"))
+    return nothing
 end
 
-
-function conflicts(s1::AbstractSystem, s2::AbstractSystem)
-    # Command buffers are applied before a system returns and can change the
-    # world's entity/component structure. They therefore cannot overlap with
-    # any other access to the world, regardless of the command types recorded.
-    if _uses_commands(s1) || _uses_commands(s2)
-        return true
+function _has_intersection(first_keys, second_keys)
+    for key in first_keys
+        key in second_keys && return true
     end
-
-    r1, w1 = reads(s1), writes(s1)
-    r2, w2 = reads(s2), writes(s2)
-
-    return !isempty(intersect(w1, r2)) ||
-        !isempty(intersect(w1, w2)) ||
-        !isempty(intersect(r1, w2))
+    return false
 end
 
-_uses_commands(sys::System) = any(config -> config isa Cmds, sys._configs)
-_uses_commands(chain::SystemChain) = any(_uses_commands, chain._systems)
-_uses_commands(dep::SystemDependency) =
-    _uses_commands(dep._before) || _uses_commands(dep._after)
+function conflicts(first::System, second::System)
+    first_reads, first_writes, first_world = _system_accesses(typeof(first))
+    second_reads, second_writes, second_world = _system_accesses(typeof(second))
+    (first_world || second_world) && return true
+    return _has_intersection(first_writes, second_reads) ||
+           _has_intersection(first_writes, second_writes) ||
+           _has_intersection(first_reads, second_writes)
+end
 
-function topological_sort_in_layers(graph::Gr.SimpleDiGraph{Int})
-    in_degrees = [length(Gr.inneighbors(graph, i)) for i in 1:Gr.nv(graph)]
-    ready_nodes = [i for i in 1:Gr.nv(graph) if in_degrees[i] == 0]
+function _stable_ready_sort!(nodes, systems)
+    sort!(nodes; by=id -> (-systems[id]._priority, id), alg=Base.Sort.MergeSort)
+    return nodes
+end
 
+function _topological_layers(graph, systems)
+    node_count = Gr.nv(graph)
+    dependency_counts = [Gr.indegree(graph, id) for id in 1:node_count]
+    ready = _stable_ready_sort!(findall(iszero, dependency_counts), systems)
     stages = Vector{Vector{Int}}()
-
-    while !isempty(ready_nodes)
-        push!(stages, ready_nodes)
-
+    order = Int[]
+    while !isempty(ready)
+        push!(stages, copy(ready))
+        append!(order, ready)
         next_ready = Int[]
-        for node in ready_nodes
-            for neighbor in Gr.outneighbors(graph, node)
-                in_degrees[neighbor] -= 1
-                if in_degrees[neighbor] == 0
-                    push!(next_ready, neighbor)
-                end
+        for id in ready
+            for successor in Gr.outneighbors(graph, id)
+                dependency_counts[successor] -= 1
+                dependency_counts[successor] == 0 && push!(next_ready, successor)
             end
         end
-        ready_nodes = next_ready
+        ready = _stable_ready_sort!(next_ready, systems)
     end
+    length(order) == node_count || throw(ArgumentError("cycle detected in schedule dependencies"))
+    return stages, order
+end
 
-    if sum(length, stages; init=0) != Gr.nv(graph)
-        error("Cycle detected in scheduling graph! Cannot execute systems.")
+function _transitive_reduction!(graph)
+    # Graphs.jl deliberately remains a cold-path detail. Removing an edge and
+    # checking reachability is simple and robust for the small DAGs builders
+    # typically compile.
+    for edge in collect(Gr.edges(graph))
+        source, destination = Gr.src(edge), Gr.dst(edge)
+        Gr.rem_edge!(graph, source, destination)
+        Gr.has_path(graph, source, destination) || Gr.add_edge!(graph, source, destination)
     end
+    return graph
+end
 
-    return stages
+function _effective_names(systems)
+    names = Vector{Symbol}(undef, length(systems))
+    explicitly_named = Set{Symbol}()
+    for (id, system) in enumerate(systems)
+        if system._name === nothing
+            candidate = Symbol("system_", id)
+            while candidate in explicitly_named
+                candidate = Symbol("_", candidate)
+            end
+            names[id] = candidate
+        else
+            system._name in explicitly_named &&
+                throw(ArgumentError("duplicate system name: $(system._name)"))
+            push!(explicitly_named, system._name)
+            names[id] = system._name
+        end
+    end
+    length(unique(names)) == length(names) ||
+        throw(ArgumentError("generated and explicit system names collide"))
+    return names
+end
+
+function _mask_matrix(keys_by_system, keys)
+    words = cld(length(keys), 64)
+    matrix = zeros(UInt64, length(keys_by_system), words)
+    key_ids = Dict(key => id for (id, key) in enumerate(keys))
+    for (system_id, system_keys) in enumerate(keys_by_system), key in system_keys
+        bit_id = key_ids[key]
+        word_id = ((bit_id - 1) >>> 6) + 1
+        matrix[system_id, word_id] |= UInt64(1) << ((bit_id - 1) & 63)
+    end
+    return matrix
+end
+
+function _compile_access_masks(systems)
+    reads_by_system = Vector{Vector{DataType}}(undef, length(systems))
+    writes_by_system = similar(reads_by_system)
+    world_writes = falses(length(systems))
+    component_keys = DataType[]
+    resource_keys = DataType[]
+    for (id, system) in enumerate(systems)
+        system_reads, system_writes, world_write = _system_accesses(typeof(system))
+        reads_by_system[id] = collect(system_reads)
+        writes_by_system[id] = collect(system_writes)
+        world_writes[id] = world_write
+        for key in (system_reads..., system_writes...)
+            if key <: ComponentAccess
+                key in component_keys || push!(component_keys, key)
+            elseif key <: ResourceAccess
+                key in resource_keys || push!(resource_keys, key)
+            end
+        end
+    end
+    component_reads = [filter(key -> key <: ComponentAccess, keys) for keys in reads_by_system]
+    component_writes = [filter(key -> key <: ComponentAccess, keys) for keys in writes_by_system]
+    resource_reads = [filter(key -> key <: ResourceAccess, keys) for keys in reads_by_system]
+    resource_writes = [filter(key -> key <: ResourceAccess, keys) for keys in writes_by_system]
+    component_types = DataType[key.parameters[1] for key in component_keys]
+    resource_types = DataType[key.parameters[1] for key in resource_keys]
+    return AccessMasks(
+        _mask_matrix(component_reads, component_keys),
+        _mask_matrix(component_writes, component_keys),
+        _mask_matrix(resource_reads, resource_keys),
+        _mask_matrix(resource_writes, resource_keys),
+        world_writes,
+        component_types,
+        resource_types,
+    )
+end
+
+function _compile_plan(systems, graph)
+    _transitive_reduction!(graph)
+    stages, order = _topological_layers(graph, systems)
+    node_count = length(systems)
+    dependency_counts = [Gr.indegree(graph, id) for id in 1:node_count]
+    successor_offsets = Vector{Int}(undef, node_count + 1)
+    successors = Int[]
+    successor_offsets[1] = 1
+    for id in 1:node_count
+        neighbors = collect(Gr.outneighbors(graph, id))
+        _stable_ready_sort!(neighbors, systems)
+        append!(successors, neighbors)
+        successor_offsets[id + 1] = length(successors) + 1
+    end
+    critical_path_ranks = ones(Int, node_count)
+    for id in Iterators.reverse(order)
+        range = successor_offsets[id]:(successor_offsets[id + 1] - 1)
+        isempty(range) || (critical_path_ranks[id] = 1 + maximum(
+            critical_path_ranks[successors[index]] for index in range
+        ))
+    end
+    names = _effective_names(systems)
+    priorities = Int[system._priority for system in systems]
+    return CompiledSchedule(
+        successor_offsets,
+        successors,
+        dependency_counts,
+        Tuple(order),
+        critical_path_ranks,
+        names,
+        priorities,
+        stages,
+        _compile_access_masks(systems),
+        isempty(stages) ? 0 : maximum(length, stages),
+    )
+end
+
+function Schedule(
+    expressions::AbstractSystem...;
+    name::Symbol=:schedule,
+    run_if::Union{NoCondition,Condition}=NoCondition(),
+)
+    flat_list = System[]
+    id_map = IdDict{Any,Int}()
+    for expression in expressions
+        extract_unique_systems!(expression, flat_list, id_map)
+    end
+    systems = Tuple(flat_list)
+    graph = Gr.SimpleDiGraph{Int}(length(systems))
+    for expression in expressions
+        build_edges!(expression, graph, id_map)
+    end
+    _validate_acyclic(graph)
+    for first_id in 1:length(systems), second_id in (first_id + 1):length(systems)
+        if conflicts(systems[first_id], systems[second_id]) &&
+           !Gr.has_path(graph, first_id, second_id) &&
+           !Gr.has_path(graph, second_id, first_id)
+            Gr.add_edge!(graph, first_id, second_id)
+        end
+    end
+    _validate_acyclic(graph)
+    plan = _compile_plan(systems, graph)
+    return Schedule(systems, plan, name, run_if)
 end
 
 function get_execution_order(schedule::Schedule)
-    return [[schedule._systems[id] for id in stage] for stage in schedule._execution_stages]
+    return [[schedule._systems[id] for id in stage] for stage in schedule._plan.stages]
 end
 
-reads(::Type{<:System{T, C}}) where {T, C} = reads_from_config_tuple(C)
-writes(::Type{<:System{T, C}}) where {T, C} = writes_from_config_tuple(C)
+mutable struct ScheduleBuilder
+    systems::Vector{AbstractSystem}
+    name::Symbol
+    run_if::Union{NoCondition,Condition}
+end
 
-function reads_from_config_tuple(::Type{C}) where {C <: Tuple}
-    all_reads = Any[]
-    for config_type in C.parameters
-        for r_type in reads(config_type)
-            push!(all_reads, r_type)
+ScheduleBuilder(; name::Symbol=:schedule, run_if::Union{NoCondition,Condition}=NoCondition()) =
+    ScheduleBuilder(AbstractSystem[], name, run_if)
+
+function add_system!(builder::ScheduleBuilder, expression::AbstractSystem)
+    push!(builder.systems, expression)
+    return builder
+end
+
+compile_schedule(builder::ScheduleBuilder) =
+    Schedule(builder.systems...; name=builder.name, run_if=builder.run_if)
+
+function _system_id(schedule::Schedule, name::Symbol)
+    id = findfirst(==(name), schedule._plan.names)
+    id === nothing && throw(KeyError(name))
+    return id
+end
+
+function explain_conflict(schedule::Schedule, first_name::Symbol, second_name::Symbol)
+    first_id = _system_id(schedule, first_name)
+    second_id = _system_id(schedule, second_name)
+    first_reads, first_writes, first_world = _system_accesses(typeof(schedule._systems[first_id]))
+    second_reads, second_writes, second_world = _system_accesses(typeof(schedule._systems[second_id]))
+    shared = unique(DataType[
+        intersect(first_writes, second_reads)...,
+        intersect(first_writes, second_writes)...,
+        intersect(first_reads, second_writes)...,
+    ])
+    return (
+        conflicts=first_world || second_world || !isempty(shared),
+        world=first_world || second_world,
+        accesses=shared,
+    )
+end
+
+
+function schedule_report(schedule::Schedule)
+    plan = schedule._plan
+    return (
+        name=schedule._name,
+        systems=length(schedule._systems),
+        edges=length(plan.successors),
+        stages=length(plan.stages),
+        max_width=plan.max_width,
+        names=copy(plan.names),
+        critical_path=isempty(plan.critical_path_ranks) ? 0 : maximum(plan.critical_path_ranks),
+    )
+end
+
+function to_dot(schedule::Schedule)
+    io = IOBuffer()
+    write_dot(io, schedule)
+    return String(take!(io))
+end
+
+function write_dot(io::IO, schedule::Schedule)
+    plan = schedule._plan
+    println(io, "digraph \"", Base.escape_string(String(schedule._name)), "\" {")
+    for (id, name) in enumerate(plan.names)
+        println(io, "  n", id, " [label=\"", Base.escape_string(String(name)), "\"];")
+    end
+    for source in eachindex(schedule._systems)
+        for index in plan.successor_offsets[source]:(plan.successor_offsets[source + 1] - 1)
+            println(io, "  n", source, " -> n", plan.successors[index], ";")
         end
     end
-    return Tuple(unique(all_reads))
-end
-
-function writes_from_config_tuple(::Type{C}) where {C <: Tuple}
-    all_writes = Any[]
-    for config_type in C.parameters
-        for w_type in writes(config_type)
-            push!(all_writes, w_type)
-        end
-    end
-    return Tuple(unique(all_writes))
-end
-
-
-reads(::Type{<:SystemChain{N, T}}) where {N, T} = reads_from_systems_tuple(T)
-
-@generated function reads(chain::SystemChain{N, T}) where {N, T}
-    return :($(reads_from_systems_tuple(T)))
-end
-
-function reads_from_systems_tuple(::Type{T}) where {T <: Tuple}
-    all_reads = Any[]
-    for sys_type in T.parameters
-        # This will now successfully find reads(::Type{<:System})!
-        for r_type in reads(sys_type)
-            push!(all_reads, r_type)
-        end
-    end
-    return Tuple(unique(all_reads))
-end
-
-
-writes(::Type{<:SystemChain{N, T}}) where {N, T} = writes_from_systems_tuple(T)
-
-@generated function writes(chain::SystemChain{N, T}) where {N, T}
-    return :($(writes_from_systems_tuple(T)))
-end
-
-function writes_from_systems_tuple(::Type{T}) where {T <: Tuple}
-    all_writes = Any[]
-    for sys_type in T.parameters
-        for w_type in writes(sys_type)
-            push!(all_writes, w_type)
-        end
-    end
-    return Tuple(unique(all_writes))
-end
-
-
-reads(::Type{<:SystemDependency{U, V}}) where {U, V} = Tuple(unique((reads(U)..., reads(V)...)))
-
-@generated function reads(dep::SystemDependency{U, V}) where {U, V}
-    return :($(reads(U)..., reads(V)...))
-end
-
-writes(::Type{<:SystemDependency{U, V}}) where {U, V} = Tuple(unique((writes(U)..., writes(V)...)))
-
-@generated function writes(dep::SystemDependency{U, V}) where {U, V}
-    return :($(writes(U)..., writes(V)...))
+    println(io, "}")
+    return io
 end

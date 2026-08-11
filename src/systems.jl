@@ -7,7 +7,13 @@ abstract type AbstractSystem end
 
 struct NoCondition end
 
-"""A typed run criterion using the same argument injection as a `System`."""
+"""
+    Condition(f, configs...)
+
+A run criterion for a [`System`](@ref) or [`Schedule`](@ref). `f` receives the
+arguments described by `configs`, exactly like a system function, and must
+return a `Bool`. The associated accesses participate in conflict detection.
+"""
 struct Condition{F,C<:Tuple{Vararg{SystemConfig}}}
     _f::F
     _configs::C
@@ -19,6 +25,19 @@ struct EnableFlag
     value::Threads.Atomic{Bool}
 end
 
+"""
+    System(f, configs...; name=nothing, priority=0, run_if=..., enabled=true)
+
+Wrap a callable as a schedulable system. Before calling `f`, Helm resolves each
+configuration in `configs` from the current `Ark.World`. Supported
+configurations are [`Query`](@ref), [`Res`](@ref), [`ResMut`](@ref), and
+[`Cmds`](@ref).
+
+`name` identifies the system in diagnostics and runtime controls. `priority`
+orders otherwise-ready systems but never overrides dependencies. Set `run_if`
+to a [`Condition`](@ref), and use `enabled=false` to create a system that is
+initially disabled.
+"""
 struct System{F,C<:Tuple{Vararg{SystemConfig}},R} <: AbstractSystem
     _f::F
     _configs::C
@@ -58,6 +77,11 @@ function _disable_system!(system::System)
     return system
 end
 
+"""
+    is_enabled(system::System) -> Bool
+
+Return whether `system` is currently enabled.
+"""
 is_enabled(system::System) = system._enabled.value[]
 
 @inline function fetch_arg(world::Ark.World, q::QueryData)

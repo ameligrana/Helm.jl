@@ -1,5 +1,17 @@
 abstract type AbstractCommand end
 
+"""
+    Cmds(specifications)
+
+Describe an Ark command buffer injected into a [`System`](@ref). Each
+specification is a tuple whose first item is a supported deferred Ark operation
+and whose remaining item describes its component or relation types. For
+example, `Cmds(((Ark.new_entity!, (Position, Velocity)),))` permits deferred
+entity creation.
+
+Helm applies the buffer after the system returns and conservatively serializes
+command-buffer systems against other systems.
+"""
 struct Cmds{N,T<:Tuple{Vararg{AbstractCommand,N}}} <: SystemConfig end
 
 

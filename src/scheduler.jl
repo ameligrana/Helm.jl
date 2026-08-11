@@ -1,7 +1,20 @@
 abstract type AbstractExecutor end
 
+"""
+    SerialExecutor()
+
+An executor that runs each ready system serially in deterministic topological
+and priority order.
+"""
 struct SerialExecutor <: AbstractExecutor end
 
+"""
+    TimingRecorder([capacity=0])
+
+Reusable storage for per-system start time, stop time, thread, and run status.
+Wrap an executor with [`TracingExecutor`](@ref), execute a schedule, and call
+[`timing_report`](@ref) to obtain named records.
+"""
 mutable struct TimingRecorder
     starts::Vector{UInt64}
     stops::Vector{UInt64}
@@ -28,6 +41,12 @@ function _prepare!(recorder::TimingRecorder, count::Int)
     return recorder
 end
 
+"""
+    timing_report(recorder, schedule)
+
+Return one timing record per system from the most recent traced execution.
+Each record contains `name`, `nanoseconds`, `thread`, and `ran`.
+"""
 function timing_report(recorder::TimingRecorder, schedule::Schedule)
     return [(
         name=schedule._plan.names[id],
@@ -37,7 +56,13 @@ function timing_report(recorder::TimingRecorder, schedule::Schedule)
     ) for id in eachindex(schedule._systems)]
 end
 
-"""A reusable worker pool. Call `Helm.close!` when it is not owned by a `Scheduler`."""
+"""
+    ThreadedExecutor(; pool=:default, workers=Threads.threadpoolsize(pool))
+
+A reusable worker pool that releases systems when their own dependencies
+finish. Call `Helm.close!` when the executor is not owned by a [`Scheduler`](@ref).
+The chosen Julia thread pool must have at least `workers` threads.
+"""
 mutable struct ThreadedExecutor <: AbstractExecutor
     pool::Symbol
     workers::Int
@@ -105,7 +130,14 @@ function ThreadedExecutor(; pool::Symbol=:default, workers::Union{Nothing,Intege
     return executor
 end
 
-"""A conservative executor that stays serial unless given a measured crossover."""
+"""
+    AutoExecutor(; pool=:default, workers=nothing, min_parallel_systems=nothing)
+
+A conservative executor that remains serial unless `min_parallel_systems` is
+provided and a schedule has enough systems and parallel width. Supply a
+threshold measured for the application; there is no generally sound static
+crossover point.
+"""
 struct AutoExecutor{T<:Union{Nothing,ThreadedExecutor}} <: AbstractExecutor
     serial::SerialExecutor
     threaded::T
@@ -136,6 +168,12 @@ function AutoExecutor(
     return AutoExecutor(SerialExecutor(), threaded, Int(min_parallel_systems))
 end
 
+"""
+    TracingExecutor(executor, recorder)
+
+Decorate an executor so each schedule execution populates `recorder` with
+per-system timing data.
+"""
 struct TracingExecutor{E<:AbstractExecutor,R<:TimingRecorder} <: AbstractExecutor
     executor::E
     recorder::R
@@ -388,6 +426,14 @@ function _execute_serial_without_phase_condition!(executor, context)
     return nothing
 end
 
+"""
+    execute!(executor, schedule, world)
+    execute!(schedule, world[, executor])
+
+Execute `schedule` against `world`. Explicit executors can be reused across
+frames. The two-argument convenience form creates and closes an executor for
+that call.
+"""
 execute!(::SerialExecutor, schedule::Schedule, world::Ark.World) =
     _execute_serial!(schedule, world)
 
@@ -436,6 +482,13 @@ function execute!(schedule::Schedule, world::Ark.World)
     end
 end
 
+"""
+    cancel!(executor::ThreadedExecutor) -> Bool
+
+Request cancellation of a running threaded execution. Return `true` when an
+execution was active, or `false` otherwise. Already-running systems are not
+interrupted.
+"""
 function cancel!(executor::ThreadedExecutor)
     lock(executor.lock)
     try
@@ -453,6 +506,14 @@ function cancel!(executor::ThreadedExecutor)
     end
 end
 
+"""
+    Helm.close!(executor)
+    Helm.close!(scheduler)
+
+Release worker tasks and other resources owned by an executor or scheduler.
+Closing is idempotent, but a threaded executor or scheduler cannot be closed
+while it is running. [`shutdown!`](@ref) closes its scheduler automatically.
+"""
 close!(::SerialExecutor) = nothing
 close!(::Nothing) = nothing
 
@@ -478,7 +539,15 @@ end
 close!(executor::AutoExecutor) = close!(executor.threaded)
 close!(executor::TracingExecutor) = close!(executor.executor)
 
-"""A named phase coordinator which owns and closes its executor on `shutdown!`."""
+"""
+    Scheduler(; startup, update, fixed_update, shutdown, phases, executor)
+    Scheduler(phases::NamedTuple; executor=AutoExecutor())
+
+A named phase coordinator. The keyword constructor provides conventional
+`:startup`, `:update`, `:fixed_update`, and `:shutdown` phases and accepts
+additional schedules in `phases`. A scheduler owns its executor and closes it
+after [`shutdown!`](@ref).
+"""
 mutable struct Scheduler{P<:NamedTuple,E<:AbstractExecutor}
     _phases::P
     _executor::E
@@ -527,10 +596,22 @@ execute!(scheduler::Scheduler, phase::Symbol, world::Ark.World) =
 execute!(scheduler::Scheduler, world::Ark.World, phase::Union{Val,Symbol}) =
     execute!(scheduler, phase, world)
 
+"""Execute the scheduler's `:startup` phase."""
 startup!(scheduler::Scheduler, world::Ark.World) = execute!(scheduler, Val(:startup), world)
+
+"""Execute the scheduler's `:update` phase."""
 update!(scheduler::Scheduler, world::Ark.World) = execute!(scheduler, Val(:update), world)
+
+"""Execute the scheduler's `:fixed_update` phase."""
 fixed_update!(scheduler::Scheduler, world::Ark.World) =
     execute!(scheduler, Val(:fixed_update), world)
+
+"""
+    shutdown!(scheduler, world)
+
+Execute the scheduler's `:shutdown` phase and close its owned executor, even
+if the phase throws.
+"""
 function shutdown!(scheduler::Scheduler, world::Ark.World)
     try
         return execute!(scheduler, Val(:shutdown), world)
@@ -539,6 +620,11 @@ function shutdown!(scheduler::Scheduler, world::Ark.World)
     end
 end
 
+"""
+    enable!(scheduler, phase, system_name)
+
+Enable a named system while the scheduler is idle.
+"""
 function enable!(scheduler::Scheduler, phase::Symbol, system_name::Symbol)
     Threads.atomic_cas!(scheduler._running, false, true) == false ||
         throw(ArgumentError("scheduler mutation is only allowed while idle"))
@@ -551,6 +637,12 @@ function enable!(scheduler::Scheduler, phase::Symbol, system_name::Symbol)
     return scheduler
 end
 
+"""
+    disable!(scheduler, phase, system_name)
+
+Disable a named system while the scheduler is idle. Its dependants remain
+eligible to run.
+"""
 function disable!(scheduler::Scheduler, phase::Symbol, system_name::Symbol)
     Threads.atomic_cas!(scheduler._running, false, true) == false ||
         throw(ArgumentError("scheduler mutation is only allowed while idle"))

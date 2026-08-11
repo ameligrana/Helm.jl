@@ -1,4 +1,10 @@
 struct QueryData{R,W,WI,WO,O} <: SystemConfig end
+"""
+    Const(T)
+
+Mark component type `T` as read-only in a [`Query`](@ref). `T` must be an
+immutable bitstype so it cannot be mutated through a read-only query result.
+"""
 struct Const{T} end
 
 function Const(::Type{T}) where {T}
@@ -31,6 +37,17 @@ function separate_reads_and_writes(comps::Tuple)
   return _sort_comps(comps, (), ())
 end
 
+"""
+    Query(components; with=(), without=())
+
+Describe an Ark query injected into a [`System`](@ref) or [`Condition`](@ref).
+Plain component types are writable; wrap a type in [`Const`](@ref) to request
+read-only access. `with` and `without` filter archetypes without returning
+those component columns.
+
+Helm closes injected queries automatically after the callable returns, even if
+it throws or only partially iterates the query.
+"""
 function Query(comps::Tuple; with=(), without=())
   R, W = separate_reads_and_writes(comps)
   return QueryData{

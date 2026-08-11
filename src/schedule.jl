@@ -2,6 +2,12 @@ struct SystemChain{N,T<:Tuple{Vararg{AbstractSystem,N}}} <: AbstractSystem
     _systems::T
 end
 
+"""
+    chain(systems...)
+
+Create a schedule expression that requires each system or nested expression to
+finish before the next one may run.
+"""
 chain(systems::AbstractSystem...) = SystemChain(systems)
 
 struct SystemDependency{T<:AbstractSystem,U<:AbstractSystem} <: AbstractSystem
@@ -9,8 +15,20 @@ struct SystemDependency{T<:AbstractSystem,U<:AbstractSystem} <: AbstractSystem
     _after::U
 end
 
+"""
+    after(system, dependency)
+
+Require `system` to run after `dependency`. This is equivalent to
+`before(dependency, system)`.
+"""
 after(system::AbstractSystem, dependency::AbstractSystem) =
     SystemDependency(dependency, system)
+
+"""
+    before(system, dependency)
+
+Require `system` to run before `dependency`.
+"""
 before(system::AbstractSystem, dependency::AbstractSystem) =
     SystemDependency(system, dependency)
 
@@ -39,6 +57,14 @@ struct CompiledSchedule{N,O<:NTuple{N,Int}}
     max_width::Int
 end
 
+"""
+    Schedule(expressions...; name=:schedule, run_if=...)
+
+Compile systems and dependency expressions into an immutable execution plan.
+Helm adds ordering edges for conflicting component and resource access. Systems
+that are both dependency-free and conflict-free remain eligible for parallel
+execution.
+"""
 struct Schedule{N,T<:Tuple{Vararg{System,N}},P<:CompiledSchedule{N},R}
     _systems::T
     _plan::P
@@ -294,10 +320,23 @@ function Schedule(
     return Schedule(systems, plan, name, run_if)
 end
 
+"""
+    get_execution_order(schedule)
+
+Return the schedule's systems grouped into topological layers. This is useful
+for inspection; dependency-driven executors may release a successor before all
+unrelated systems in the same layer have finished.
+"""
 function get_execution_order(schedule::Schedule)
     return [[schedule._systems[id] for id in stage] for stage in schedule._plan.stages]
 end
 
+"""
+    ScheduleBuilder(; name=:schedule, run_if=...)
+
+A mutable collector for incrementally assembling a schedule. Call
+[`compile_schedule`](@ref) to create an immutable snapshot.
+"""
 mutable struct ScheduleBuilder
     systems::Vector{AbstractSystem}
     name::Symbol
@@ -307,11 +346,22 @@ end
 ScheduleBuilder(; name::Symbol=:schedule, run_if::Union{NoCondition,Condition}=NoCondition()) =
     ScheduleBuilder(AbstractSystem[], name, run_if)
 
+"""
+    add_system!(builder, expression)
+
+Append a system or dependency expression to `builder` and return the builder.
+"""
 function add_system!(builder::ScheduleBuilder, expression::AbstractSystem)
     push!(builder.systems, expression)
     return builder
 end
 
+"""
+    compile_schedule(builder) -> Schedule
+
+Compile the builder's current contents into an immutable schedule snapshot.
+Later changes to the builder do not affect an existing snapshot.
+"""
 compile_schedule(builder::ScheduleBuilder) =
     Schedule(builder.systems...; name=builder.name, run_if=builder.run_if)
 
@@ -321,6 +371,13 @@ function _system_id(schedule::Schedule, name::Symbol)
     return id
 end
 
+"""
+    explain_conflict(schedule, first_name, second_name)
+
+Explain whether two named systems have incompatible accesses. The result has
+the fields `conflicts`, `world`, and `accesses`; `world` identifies the
+conservative global conflict introduced by command-buffer use.
+"""
 function explain_conflict(schedule::Schedule, first_name::Symbol, second_name::Symbol)
     first_id = _system_id(schedule, first_name)
     second_id = _system_id(schedule, second_name)
@@ -339,6 +396,13 @@ function explain_conflict(schedule::Schedule, first_name::Symbol, second_name::S
 end
 
 
+"""
+    schedule_report(schedule)
+
+Return summary metadata about a compiled schedule, including its system and
+edge counts, topological stages, maximum width, names, and critical-path
+length.
+"""
 function schedule_report(schedule::Schedule)
     plan = schedule._plan
     return (
@@ -352,12 +416,22 @@ function schedule_report(schedule::Schedule)
     )
 end
 
+"""
+    to_dot(schedule) -> String
+
+Render the compiled dependency graph in Graphviz DOT format.
+"""
 function to_dot(schedule::Schedule)
     io = IOBuffer()
     write_dot(io, schedule)
     return String(take!(io))
 end
 
+"""
+    write_dot(io, schedule) -> io
+
+Write the compiled dependency graph in Graphviz DOT format to `io`.
+"""
 function write_dot(io::IO, schedule::Schedule)
     plan = schedule._plan
     println(io, "digraph \"", Base.escape_string(String(schedule._name)), "\" {")

@@ -2,7 +2,7 @@ module Helm
 import Ark
 import Graphs as Gr
 
-export Schedule, System, after, before, chain, get_execution_order
+export Schedule, System, after, before, chain, execute!, get_execution_order
 export Cmds, Const, Query, Res, ResMut
 
 include("SystemConfigs/system_configs.jl")

@@ -130,6 +130,13 @@ end
 
 
 function conflicts(s1::AbstractSystem, s2::AbstractSystem)
+    # Command buffers are applied before a system returns and can change the
+    # world's entity/component structure. They therefore cannot overlap with
+    # any other access to the world, regardless of the command types recorded.
+    if _uses_commands(s1) || _uses_commands(s2)
+        return true
+    end
+
     r1, w1 = reads(s1), writes(s1)
     r2, w2 = reads(s2), writes(s2)
 
@@ -137,6 +144,11 @@ function conflicts(s1::AbstractSystem, s2::AbstractSystem)
         !isempty(intersect(w1, w2)) ||
         !isempty(intersect(r1, w2))
 end
+
+_uses_commands(sys::System) = any(config -> config isa Cmds, sys._configs)
+_uses_commands(chain::SystemChain) = any(_uses_commands, chain._systems)
+_uses_commands(dep::SystemDependency) =
+    _uses_commands(dep._before) || _uses_commands(dep._after)
 
 function topological_sort_in_layers(graph::Gr.SimpleDiGraph{Int})
     in_degrees = [length(Gr.inneighbors(graph, i)) for i in 1:Gr.nv(graph)]
@@ -159,7 +171,7 @@ function topological_sort_in_layers(graph::Gr.SimpleDiGraph{Int})
         ready_nodes = next_ready
     end
 
-    if sum(length, stages) != Gr.nv(graph)
+    if sum(length, stages; init=0) != Gr.nv(graph)
         error("Cycle detected in scheduling graph! Cannot execute systems.")
     end
 

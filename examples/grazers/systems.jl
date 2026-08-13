@@ -5,7 +5,7 @@ initialize_grazers = System(
     Res(WorldSize),
     Res(GrazerInit),
     ResMut(SimulationRNG),
-    Cmds(((new_entity!, GRAZER_MOVING_COMPONENTS),)),
+    Cmds((NewEntityCommand(GRAZER_MOVING_COMPONENTS),)),
 ) do size, settings, simulation_rng, commands
     rng = simulation_rng.rng
     for _ in 1:settings.count
@@ -140,8 +140,8 @@ end
 
 const reproduction_commands = Cmds(
     (
-        (new_entity!, GRAZER_MOVING_COMPONENTS),
-        (new_entity!, GRAZER_GRAZING_COMPONENTS),
+        NewEntityCommand(GRAZER_MOVING_COMPONENTS),
+        NewEntityCommand(GRAZER_GRAZING_COMPONENTS),
     ),
 )
 
@@ -264,7 +264,7 @@ end
 
 remove_dead_grazers = System(
     Query((Const(Energy),)),
-    Cmds(((remove_entity!,),)),
+    Cmds((RemoveEntityCommand(),)),
 ) do query, commands
     for (entities, energies) in query
         for i in eachindex(entities, energies)
@@ -280,8 +280,8 @@ decide_grazer_state = System(
     Query((Const(Position), Const(Genes)); with=(Grazing,)),
     Cmds(
         (
-            (exchange_components!, (; add=(Grazing,), remove=(Moving,))),
-            (exchange_components!, (; add=(Moving,), remove=(Grazing,))),
+            ExchangeComponentsCommand(add=(Grazing,), remove=(Moving,)),
+            ExchangeComponentsCommand(add=(Moving,), remove=(Grazing,)),
         ),
     ),
 ) do grid, moving_query, grazing_query, commands

@@ -1,22 +1,9 @@
+const Const = Ark.Const
+
 struct QueryData{R,W,WI,WO,O} <: SystemConfig end
-"""
-    Const(T)
-
-Mark component type `T` as read-only in a [`Query`](@ref). `T` must be an
-immutable bitstype so it cannot be mutated through a read-only query result.
-"""
-struct Const{T} end
-
-function Const(::Type{T}) where {T}
-    if !isbitstype(T)
-        throw(ArgumentError("A component can be marked constant only if immutable."))
-    end
-
-    return Const{T}
-end
 
 _unwrap_comp(::Type{T}) where {T} = (T, :write)
-_unwrap_comp(::Type{Const{T}}) where {T} = (T, :read)
+_unwrap_comp(::Type{Ark.Const{T}}) where {T} = (T, :read)
 
 _sort_comps(::Tuple{}, reads::Tuple, writes::Tuple) = (reads, writes)
 
@@ -69,12 +56,9 @@ function Ark.Query(
   WO_Tuple<:Tuple,
   O_Tuple<:Tuple,
 }
-  component_types = map(O_Tuple.parameters) do T
-    T <: Const ? Ark.Const{T.parameters[1]} : T
-  end
   return Ark.Query(
     w,
-    Tuple(component_types);
+    Tuple(O_Tuple.parameters);
     with=Tuple(WI_Tuple.parameters),
     without=Tuple(WO_Tuple.parameters),
   )

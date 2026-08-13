@@ -99,7 +99,7 @@ end
 
     @testset "queries close before command buffers are applied" begin
         world = populated_world()
-        commands = Cmds(((Ark.new_entity!, (LifetimeComponent,)),))
+        commands = Cmds((Ark.NewEntityCommand((LifetimeComponent,)),))
         system = System(LIFETIME_QUERY, commands) do _query, command_buffer
             Ark.new_entity!(command_buffer, (LifetimeComponent(2),))
             return nothing

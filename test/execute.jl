@@ -12,6 +12,16 @@ struct ExecutionComponent
     value::Int
 end
 
+struct TestCommand
+    entity::Ark.Entity
+    value::Int
+end
+
+function Ark.apply!(world::Ark.World, command::TestCommand)
+    Ark.set_components!(world, command.entity, (ExecutionComponent(command.value),))
+    return nothing
+end
+
 @testset "Schedule execution" begin
     @testset "empty schedules and return values" begin
         world = Ark.World()
@@ -130,7 +140,7 @@ end
 
     @testset "command-buffer systems are serialized" begin
         world = Ark.World(ExecutionComponent)
-        commands = Cmds(((Ark.new_entity!, (ExecutionComponent,)),))
+        commands = Cmds((Ark.NewEntityCommand((ExecutionComponent,)),))
         create_first = System(commands) do buffer
             Ark.new_entity!(buffer, (ExecutionComponent(1),))
             return nothing
@@ -156,6 +166,32 @@ end
         )
         @test entity_count == 2
         @test query_ran[] == 1
+    end
+
+    @testset "command buffers accept Ark specs and record! arbitrary commands" begin
+        world = Ark.World(ExecutionComponent)
+        commands = Cmds((
+            Ark.NewEntityCommand((ExecutionComponent,)),
+            TestCommand,
+        ))
+        spawn_and_record = System(commands) do buffer
+            entity = Ark.new_entity!(buffer, (ExecutionComponent(0),))
+            Ark.record!(buffer, TestCommand(entity, 7))
+            return nothing
+        end
+
+        execute!(Schedule(spawn_and_record), world)
+
+        entity_count = sum(
+            length(entities)
+            for (entities, _) in Ark.Query(world, (ExecutionComponent,))
+        )
+        total_value = sum(
+            values[1].value
+            for (_, values) in Ark.Query(world, (ExecutionComponent,))
+        )
+        @test entity_count == 1
+        @test total_value == 7
     end
 
     @testset "errors stop later stages" begin

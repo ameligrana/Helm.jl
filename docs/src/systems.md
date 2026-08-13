@@ -98,9 +98,10 @@ but its dependants can still become ready.
 ## Deferred structural changes
 
 Use [`Cmds`](@ref) for changes that cannot be applied while queries hold the
-world locked. The specification fixes the supported command shapes when the
-system is constructed; the injected Ark buffer provides the usual Ark command
-methods.
+world locked. The specification is a tuple of Ark command spec constructors,
+the same tuple `Ark.CommandBuffer` accepts, fixing the supported
+command shapes when the system is constructed; the injected buffer provides the
+usual Ark command methods.
 
 ```@example commands
 import Ark
@@ -111,7 +112,7 @@ struct Health
 end
 
 world = Ark.World(Health)
-create_health = Cmds(((Ark.new_entity!, (Health,)),))
+create_health = Cmds((Ark.NewEntityCommand((Health,)),))
 
 spawn = System(create_health; name=:spawn) do commands
     Ark.new_entity!(commands, (Health(100),))

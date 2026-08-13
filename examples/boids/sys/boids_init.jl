@@ -9,7 +9,7 @@ const BOID_COMPONENTS = (Position, Velocity, Rotation, Neighbors, UpdateStep)
 initialize_boids = System(
     Res(WorldSize),
     Res(BoidsInit),
-    Cmds(((new_entity!, BOID_COMPONENTS),)),
+    Cmds((NewEntityCommand(BOID_COMPONENTS),)),
 ) do world_size, settings, commands
     for _ in 1:settings.count
         angle = rand() * 2π
